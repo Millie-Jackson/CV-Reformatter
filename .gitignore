@@ -1,0 +1,40 @@
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+.cv-reformatter/
+
+# Conda environment
+*.conda
+*.lock
+conda-meta/
+*.yaml
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Logs and temp
+*.log
+*.tmp
+
+# Output files
+output/
+*.pdf
+*.docx~
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Client-provided documents
+Templates & Briefs/
