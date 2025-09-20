@@ -104,7 +104,7 @@ def _split_experience_entries(text: str) -> List[str]:
     return [m.strip() for m in merged if m.strip()]
 
 def _format_company_header(p: Paragraph, company: str, title: str, dates: str, info: str = "") -> None:
-    add_blank_lines_before(p, 1)
+    add_blank_lines_before(p, 2)
     for r in p.runs:
         r.text = ""
         r.bold = False
@@ -118,6 +118,19 @@ def _format_company_header(p: Paragraph, company: str, title: str, dates: str, i
     apply_style_if_exists(p, CV_BODY) or apply_style_if_exists(p, "Normal")
     ensure_font_calibri_10(p)
 
+
+def tidy_skills_text(s: str) -> str:
+    """Tiny punctuation tidy for skills bullets (non-invasive)."""
+    if not s:
+        return s
+    t = s.strip()
+    # Collapse ", and" -> " and"
+    t = re.sub(r",\s+and\b", " and", t)
+    # Turn ". Use of" -> "; use of"
+    t = re.sub(r"\.\s+Use of\b", "; use of", t)
+    # Normalize double spaces
+    t = re.sub(r"\s{2,}", " ", t)
+    return t
 def _insert_paragraph_after(heading_p: Paragraph, text: str, bullet: bool = False) -> Paragraph:
     p = new_paragraph_after(heading_p)
     cleaned = re.sub(r"^\s*[•\-–—]\s*", "", text or "")
@@ -305,6 +318,7 @@ def autofill_by_labels(template_path: str, output_path: str, mapping: Dict[str, 
         p_sk = _find_heading(doc, "skills") or doc.add_heading("Key Skills", level=2)
         _clear_filler_after(p_sk)
         for skill in (mapping["SKILLS"] or "").splitlines():
+            skill = tidy_skills_text(skill)
             if not skill.strip():
                 continue
             p_sk = _insert_paragraph_after(p_sk, skill, bullet=True)
