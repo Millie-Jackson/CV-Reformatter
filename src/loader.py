@@ -1,79 +1,76 @@
-"""
-loader.py
----------
-Minimal DOCX loader for the POC.
 
-Reads a DOCX file and returns a list of "blocks" (paragraphs) with simple heading detection.
-- We rely on python-docx paragraph.style.name when available.
-- We also include a heuristic: text in ALL CAPS and/or short lines may be headings.
-
-This is intentionally lightweight for the POC and tailored to a single input CV.
-"""
-
-from dataclasses import dataclass, asdict
-from typing import List, Dict, Any, Optional
-import re
+# loader.py (ordered blocks with correct body traversal)
+from dataclasses import dataclass
+from typing import List, Iterable, Union
 
 from docx import Document
-
+from docx.table import Table, _Cell
+from docx.text.paragraph import Paragraph
+from docx.oxml.table import CT_Tbl
+from docx.oxml.text.paragraph import CT_P
 
 @dataclass
 class Block:
     text: str
     is_heading: bool
-    style: Optional[str] = None
-    index: int = 0
+    source: str  # 'body', 'table', 'textbox'
 
+def _is_heading_para(p: Paragraph) -> bool:
+    try:
+        name = (p.style.name or "").lower()
+    except Exception:
+        name = ""
+    return ("heading" in name) or ("title" in name)
 
-HEADING_STYLE_KEYWORDS = ("heading", "title")
+def iter_block_items(parent) -> Iterable[Union[Paragraph, Table]]:
+    """
+    Yield each paragraph and table child within *parent* in document order.
+    Works for Document or _Cell.
+    """
+    if isinstance(parent, _Cell):
+        parent_elm = parent._tc
+    else:
+        # Use the public .element.body, not non-existent _body
+        parent_elm = parent.element.body
+    for child in parent_elm.iterchildren():
+        if isinstance(child, CT_P):
+            yield Paragraph(child, parent)
+        elif isinstance(child, CT_Tbl):
+            yield Table(child, parent)
 
-
-def _looks_like_heading(text: str) -> bool:
-    """Very simple heuristic for headings in case style info isn't reliable."""
-    t = text.strip()
-    if not t:
-        return False
-    # ALL CAPS and relatively short
-    if t.isupper() and len(t) <= 60:
-        return True
-    # Ends with ":" and shortish
-    if t.endswith(":") and len(t) <= 80:
-        return True
-    # Single words or two words often used as section titles
-    if len(t.split()) <= 4 and re.match(r"^[A-Za-z &/,-]+$", t):
-        return True
-    return False
-
+def _iter_textbox_paragraph_texts(doc: Document):
+    # Namespace-agnostic textbox extraction
+    try:
+        body = doc.element.body
+        for txbx in body.xpath('.//*[local-name()="txbxContent"]'):
+            for p in txbx.xpath('.//*[local-name()="p"]'):
+                texts = [t.text for t in p.xpath('.//*[local-name()="t"]') if getattr(t, "text", None)]
+                yield "".join(texts).strip()
+    except Exception:
+        return
 
 def load_docx_blocks(path: str) -> List[Block]:
-    """
-    Read a .docx file and split into blocks (paragraphs).
-    Marks a block as heading if:
-      - paragraph.style.name includes 'Heading' or 'Title', OR
-      - heuristic _looks_like_heading returns True
-    Empty/whitespace-only paragraphs are skipped.
-    """
     doc = Document(path)
     blocks: List[Block] = []
-    idx = 0
 
-    for p in doc.paragraphs:
-        text = p.text.strip()
-        if not text:
-            continue
+    # Preserve order: walk paragraphs and tables interleaved
+    for item in iter_block_items(doc):
+        if isinstance(item, Paragraph):
+            txt = (item.text or "").strip()
+            blocks.append(Block(text=txt, is_heading=_is_heading_para(item), source="body"))
+        elif isinstance(item, Table):
+            for row in item.rows:
+                for cell in row.cells:
+                    for p in cell.paragraphs:
+                        txt = (p.text or "").strip()
+                        blocks.append(Block(text=txt, is_heading=_is_heading_para(p), source="table"))
 
-        style_name = getattr(getattr(p, "style", None), "name", None)
-        style_lower = style_name.lower() if style_name else ""
+    # Text boxes (order may not be exact; capture anyway)
+    for txt in _iter_textbox_paragraph_texts(doc):
+        blocks.append(Block(text=txt, is_heading=False, source="textbox"))
 
-        is_heading_by_style = any(k in style_lower for k in HEADING_STYLE_KEYWORDS)
-        is_heading = is_heading_by_style or _looks_like_heading(text)
+    # Normalise None
+    return [Block(text=(b.text or ""), is_heading=b.is_heading, source=b.source) for b in blocks]
 
-        blocks.append(Block(text=text, is_heading=is_heading, style=style_name, index=idx))
-        idx += 1
-
-    return blocks
-
-
-def to_serialisable(blocks: List[Block]) -> List[Dict[str, Any]]:
-    """Convert Block dataclasses to plain dicts for JSON export."""
-    return [asdict(b) for b in blocks]
+def to_serialisable(blocks: List[Block]):
+    return [dict(text=b.text, is_heading=b.is_heading, source=b.source) for b in blocks]
