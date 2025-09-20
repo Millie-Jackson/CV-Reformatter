@@ -1,4 +1,4 @@
-# autofill.py (guideline-enhanced)
+# autofill.py (skills placement fix + robust header/location)
 import re
 from typing import Dict, Optional, List, Tuple
 
@@ -6,7 +6,7 @@ from docx import Document
 from docx.text.paragraph import Paragraph
 
 from utilities import (
-    simulated_letter_spacing_upper_bold,
+    letter_space_two,
     ensure_font_calibri_10,
     apply_style_if_exists,
     new_paragraph_after,
@@ -15,16 +15,11 @@ from utilities import (
 )
 
 LABELS = {
-    "name":       re.compile(r"(?i)\b(full\s+name|name|candidate\s+name)\b"),
-    "email":      re.compile(r"(?i)\b(e-?mail|email)\b"),
-    "phone":      re.compile(r"(?i)\b(phone|mobile|tel|telephone|contact\s*number)\b"),
-    "url":        re.compile(r"(?i)\b(website|portfolio|linkedin|github|url)\b"),
     "summary":    re.compile(r"(?i)\b(profile|personal\s+profile|summary|objective|about\s+me)\b"),
     "experience": re.compile(r"(?i)\b(experience|employment|employment\s+history|work\s+history|career\s+history)\b"),
     "education":  re.compile(r"(?i)\b(education|qualifications|academic)\b"),
-    "skills":     re.compile(r"(?i)\b(skills|key\s+skills|technical\s+skills|core\s+skills)\b"),
-    "additional": re.compile(r"(?i)\b(additional\s+information|other\s+information)\b"),
-    "location":   re.compile(r"(?i)\b(candidate\s+location|location|address|based)\b"),
+    # Match a wide range of skills headers incl. 'Skills & Competencies'
+    "skills":     re.compile(r"(?i)\b(skills|key\s+skills|technical\s+skills|core\s+skills|skills\s*(?:&|and)\s*competencies|competencies)\b"),
 }
 
 FILLER_PATTERNS = [
@@ -39,24 +34,16 @@ FILLER_PATTERNS = [
     re.compile(r"^\s+$"),
 ]
 
-GENERIC_TITLES = {"curriculum vitae", "cv", "resume", "resumé"}
-
 CV_BODY = "CV Body"
 CV_BULLET = "CV Bullet"
 
 def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip()).lower()
 
-def _replace_paragraph_text(paragraph: Paragraph, text: str, bold: bool = False, uppercase: bool = False, spaced: bool = False) -> None:
+def _replace_paragraph_text(paragraph: Paragraph, text: str, bold: bool = False) -> None:
     for r in paragraph.runs:
         r.text = ""
         r.bold = False
-    if spaced:
-        text = simulated_letter_spacing_upper_bold(text, spaces=2)
-        bold = True
-        uppercase = False
-    elif uppercase:
-        text = (text or "").upper()
     run = paragraph.add_run(text or "")
     run.bold = bool(bold)
     ensure_font_calibri_10(paragraph)
@@ -77,7 +64,31 @@ def _find_heading(doc, section_key: str) -> Optional[Paragraph]:
                         return p
     return None
 
-DATE_RANGE_RE = re.compile(r"(?i)\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{4})[^\n]{0,20}?\b(?:present|\d{4})\b")
+def _find_title_paragraph(doc) -> Optional[Paragraph]:
+    for p in doc.paragraphs[:12]:
+        style = getattr(getattr(p, "style", None), "name", "") or ""
+        if "title" in style.lower():
+            return p
+    for p in doc.paragraphs[:20]:
+        if re.search(r"(?i)\bcurriculum\s+vitae\b", p.text):
+            return p
+    return doc.paragraphs[0] if doc.paragraphs else None
+
+def _find_location_placeholders(doc) -> List[Paragraph]:
+    nodes = []
+    rx = re.compile(r"(?i)\bcandidate\s+location\b")
+    for p in doc.paragraphs[:60]:
+        if rx.search(p.text):
+            nodes.append(p)
+    for tbl in doc.tables:
+        for row in tbl.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    if rx.search(p.text):
+                        nodes.append(p)
+    return nodes
+
+DATE_RANGE_RE = re.compile(r"(?i)\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|\d{4})[^\n]{0,20}?\b(?:present|\d{4})\b" )
 
 def _split_experience_entries(text: str) -> List[str]:
     blocks = re.split(r"\n\s*\n", text.strip())
@@ -93,39 +104,17 @@ def _split_experience_entries(text: str) -> List[str]:
     return [m.strip() for m in merged if m.strip()]
 
 def _format_company_header(p: Paragraph, company: str, title: str, dates: str) -> None:
-    add_blank_lines_before(p, 2)  # two-line space before each company entry
+    add_blank_lines_before(p, 2)
     for r in p.runs:
         r.text = ""
         r.bold = False
     p.add_run((dates or "").strip()).bold = True
     p.add_run("  ")
-    p.add_run((company or "").strip().upper()).bold = True  # company uppercase
+    p.add_run((company or "").strip().upper()).bold = True
     p.add_run(" — ")
-    p.add_run((title or "").strip().title()).bold = True    # title bold
+    p.add_run((title or "").strip().title()).bold = True
     apply_style_if_exists(p, CV_BODY) or apply_style_if_exists(p, "Normal")
     ensure_font_calibri_10(p)
-
-def _parse_company_title_dates(line: str) -> Tuple[str, str, str]:
-    m = DATE_RANGE_RE.search(line)
-    dates = m.group(0) if m else ""
-    core = line
-    if dates:
-        core = line.replace(dates, "").strip(" -—–,\t")
-    company, title = "", ""
-    if " at " in core.lower():
-        left, right = re.split(r"(?i)\s+at\s+", core, maxsplit=1)
-        title = left.strip(" -—–,"); company = right.strip(" -—–,")
-    else:
-        parts = re.split(r"\s[-–—]\s", core, maxsplit=1)
-        if len(parts) == 2:
-            left, right = parts
-            if len(right) > len(left): company, title = left, right
-            else: title, company = left, right
-        else:
-            toks = [t.strip() for t in core.split(",") if t.strip()]
-            if len(toks) >= 2: company, title = toks[0], ", ".join(toks[1:])
-            else: title = core
-    return company.strip(), title.strip(), dates.strip()
 
 def _insert_paragraph_after(heading_p: Paragraph, text: str, bullet: bool = False) -> Paragraph:
     p = new_paragraph_after(heading_p)
@@ -142,51 +131,49 @@ def _clear_filler_after(heading_p: Paragraph, max_to_clear: int = 12) -> None:
     while p is not None and max_to_clear > 0:
         para = P(p, heading_p._parent)
         text = (para.text or "").strip()
-        style_name = getattr(getattr(para, "style", None), "name", "") or ""
-        if "heading" in style_name.lower() or "title" in style_name.lower():
+        style = getattr(getattr(para, "style", None), "name", "") or ""
+        if "heading" in style.lower() or "title" in style.lower():
             break
         if any(rx.search(text) for rx in FILLER_PATTERNS):
             parent = para._element.getparent()
             parent.remove(para._element)
             max_to_clear -= 1
             p = heading_p._p.getnext()
-        else:
-            break
+            continue
+        break
 
 def autofill_by_labels(template_path: str, output_path: str, mapping: Dict[str, str], meta: Optional[Dict[str, str]] = None) -> Dict[str, int]:
     doc = Document(template_path)
     changes = 0
 
-    # Top 2 lines: UPPERCASE + bold + letter-spacing (name + location)
-    top = mapping.get("NAME") or ""
-    loc = mapping.get("LOCATION") or ""
-    if doc.paragraphs:
-        _replace_paragraph_text(doc.paragraphs[0], top or doc.paragraphs[0].text, spaced=True); changes += 1
-        if len(doc.paragraphs) > 1:
-            _replace_paragraph_text(doc.paragraphs[1], loc or doc.paragraphs[1].text, spaced=True); changes += 1
+    # --- Header first line ---
+    name = (mapping.get("NAME") or "").strip()
+    title_p = _find_title_paragraph(doc)
+    header_text = f"CURRICULUM VITAE FOR {name}" if name else "CURRICULUM VITAE"
+    if title_p is not None:
+        _replace_paragraph_text(title_p, letter_space_two(header_text), bold=True); changes += 1
 
-    # Consultant metadata (optional) just below banner
-    if meta:
-        bits = []
-        if meta.get("candidate_number"):   bits.append(f"Candidate No: {meta['candidate_number']}")
-        if meta.get("residential_status"): bits.append(f"Residential Status: {meta['residential_status']}")
-        if meta.get("notice_period"):      bits.append(f"Notice Period: {meta['notice_period']}")
-        if bits:
-            after = doc.paragraphs[1] if len(doc.paragraphs) > 1 else doc.paragraphs[0]
-            mp = new_paragraph_after(after)
-            apply_style_if_exists(mp, CV_BODY) or apply_style_if_exists(mp, "Normal")
-            _replace_paragraph_text(mp, " | ".join(bits)); changes += 1
+    # --- Location line ---
+    location = (mapping.get("LOCATION") or "CANDIDATE LOCATION").strip()
+    loc_nodes = _find_location_placeholders(doc)
+    if loc_nodes:
+        for node in loc_nodes:
+            _replace_paragraph_text(node, letter_space_two(location), bold=True); changes += 1
+    else:
+        if title_p is not None:
+            after = new_paragraph_after(title_p)
+            _replace_paragraph_text(after, letter_space_two(location), bold=True); changes += 1
 
-    # Summary
+    # --- Summary ---
     if mapping.get("SUMMARY"):
         p_sum = _find_heading(doc, "summary") or doc.add_heading("Personal Profile", level=2)
         _clear_filler_after(p_sum)
         for line in (mapping["SUMMARY"] or "").splitlines():
-            _insert_paragraph_after(p_sum, line, bullet=False)
-            p_sum = new_paragraph_after(p_sum)
+            created = _insert_paragraph_after(p_sum, line, bullet=False)
+            p_sum = created
         changes += 1
 
-    # Experience (structured)
+    # --- Experience ---
     if mapping.get("EXPERIENCE"):
         p_head = _find_heading(doc, "experience") or doc.add_heading("Employment History", level=2)
         _clear_filler_after(p_head)
@@ -194,8 +181,16 @@ def autofill_by_labels(template_path: str, output_path: str, mapping: Dict[str, 
         anchor = p_head
         for entry in entries:
             lines = [l for l in entry.splitlines() if l.strip()]
-            if not lines: continue
-            company, title, dates = _parse_company_title_dates(lines[0])
+            if not lines: 
+                continue
+            header = lines[0]
+            m = re.search(DATE_RANGE_RE, header)
+            dates = m.group(0) if m else ""
+            core = header
+            if dates: 
+                core = core.replace(dates, "").strip(" -—–,\t")
+            company = core.split(",")[0] if "," in core else core
+            title = core.replace(company, "", 1).strip(" -—–,\t")
             header_p = new_paragraph_after(anchor)
             _format_company_header(header_p, company, title, dates); changes += 1
             for bullet in lines[1:]:
@@ -206,22 +201,24 @@ def autofill_by_labels(template_path: str, output_path: str, mapping: Dict[str, 
                 header_p = bp
             anchor = header_p
 
-    # Education
+    # --- Skills (FIXED) ---
+    if mapping.get("SKILLS"):
+        p_sk = _find_heading(doc, "skills") or doc.add_heading("Key Skills", level=2)
+        _clear_filler_after(p_sk)
+        for skill in (mapping["SKILLS"] or "").splitlines():
+            if not skill.strip():
+                continue
+            created = _insert_paragraph_after(p_sk, skill, bullet=True)
+            p_sk = created  # chain to last inserted paragraph (no extra blanks)
+        changes += 1
+
+    # --- Education ---
     if mapping.get("EDUCATION"):
         p_edu = _find_heading(doc, "education") or doc.add_heading("Education", level=2)
         _clear_filler_after(p_edu)
         for line in (mapping["EDUCATION"] or "").splitlines():
-            _insert_paragraph_after(p_edu, line, bullet=False)
-            p_edu = new_paragraph_after(p_edu)
-        changes += 1
-
-    # Skills
-    if mapping.get("SKILLS"):
-        p_sk = _find_heading(doc, "skills") or doc.add_heading("Key Skills", level=2)
-        _clear_filler_after(p_sk)
-        for skill in (mapping["SKILLS"] or "").split(", "):
-            _insert_paragraph_after(p_sk, skill, bullet=True)
-            p_sk = new_paragraph_after(p_sk)
+            created = _insert_paragraph_after(p_edu, line, bullet=False)
+            p_edu = created
         changes += 1
 
     doc.save(output_path)

@@ -11,6 +11,8 @@ BODY_PT = 10
 def ensure_font_calibri_10(paragraph: Paragraph) -> None:
     for run in paragraph.runs:
         run.font.name = CALIBRI
+        if run._element.rPr is None:
+            run._element.add_rPr()
         run._element.rPr.rFonts.set(qn('w:eastAsia'), CALIBRI)
         run.font.size = Pt(BODY_PT)
 
@@ -32,15 +34,10 @@ def add_blank_lines_before(paragraph: Paragraph, count: int = 2) -> None:
         new_p = OxmlElement('w:p')
         paragraph._p.addprevious(new_p)
 
-def simulated_letter_spacing_upper_bold(text: str, spaces: int = 2) -> str:
+def letter_space_two(text: str) -> str:
+    """Uppercase and insert TWO spaces between EVERY character (including spaces)."""
     text = (text or "").upper()
-    out = []
-    for ch in text:
-        if ch == " ":
-            out.append("   ")  # wider gap between words
-        else:
-            out.append(ch + (" " * spaces))
-    return "".join(out).strip()
+    return ('  ').join(list(text)).strip()
 
 def normalise_punctuation(s: str) -> str:
     s = re.sub(r"[ \t]+", " ", s)
