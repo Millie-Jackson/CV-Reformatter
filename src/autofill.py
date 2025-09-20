@@ -1,10 +1,9 @@
-# autofill.py (experience improvements + filler cleanup)
+# autofill.py (stronger cleanup of 'Xxxxx…' placeholders)
 import re
 from typing import Dict, Optional, List, Tuple
 
 from docx import Document
 from docx.text.paragraph import Paragraph
-from docx.oxml.ns import qn
 
 from utilities import (
     letter_space_two,
@@ -18,12 +17,10 @@ from utilities import (
 LABELS = {
     "summary":    re.compile(r"(?i)\b(profile|personal\s+profile|summary|objective|about\s+me)\b"),
     "experience": re.compile(r"(?i)\b(experience|employment|employment\s+history|work\s+history|career\s+history)\b"),
-    "education":  re.compile(r"(?i)\b(education|qualifications|academic)\b"),
-    # Match a wide range of skills headers incl. 'Skills & Competencies'
+    "education":  re.compile(r"(?i)\b(education|education\s*&\s*qualifications|education\s+and\s+qualifications|qualifications|academic)\b"),
     "skills":     re.compile(r"(?i)\b(skills|key\s+skills|technical\s+skills|core\s+skills|skills\s*(?:&|and)\s*competencies|competencies)\b"),
 }
 
-# Common template filler lines we want to delete under headings
 FILLER_PATTERNS = [
     re.compile(r"^x{5,}$", re.I),
     re.compile(r"^list most recent first\.?$", re.I),
@@ -93,8 +90,7 @@ def _find_location_placeholders(doc) -> List[Paragraph]:
 DATE_RANGE_RE = re.compile(r"(?i)\b(?:\d{1,2}[/\-]\d{1,2}[/\-]\d{2,4}|\bjan|\bfeb|\bmar|\bapr|\bmay|\bjun|\bjul|\baug|\bsep|\boct|\bnov|\bdec|\d{4})[^\n]{0,30}?\b(?:present|current|\d{4})\b")
 
 def _split_experience_entries(text: str) -> List[str]:
-    # Split into blocks by double-newline, but merge blocks until we hit another date-like header
-    blocks = re.split(r"\n\s*\n", text.strip())
+    blocks = re.split(r"\n\s*\n", (text or '').strip())
     merged, cur = [], []
     for b in blocks:
         if DATE_RANGE_RE.search(b) and cur:
@@ -107,20 +103,15 @@ def _split_experience_entries(text: str) -> List[str]:
     return [m.strip() for m in merged if m.strip()]
 
 def _format_company_header(p: Paragraph, company: str, title: str, dates: str, info: str = "") -> None:
-    # Avoid excessive padding; one blank line before header is enough
     add_blank_lines_before(p, 1)
     for r in p.runs:
         r.text = ""
         r.bold = False
-    # DATE (bold)
     p.add_run((dates or "").strip()).bold = True
     p.add_run("  ")
-    # COMPANY (bold)
     p.add_run((company or "").strip().upper()).bold = True
     p.add_run(" — ")
-    # TITLE (bold)
     p.add_run((title or "").strip().title()).bold = True
-    # INFO (normal sentence case), optional
     if info:
         p.add_run(" — " + info.strip())
     apply_style_if_exists(p, CV_BODY) or apply_style_if_exists(p, "Normal")
@@ -128,24 +119,40 @@ def _format_company_header(p: Paragraph, company: str, title: str, dates: str, i
 
 def _insert_paragraph_after(heading_p: Paragraph, text: str, bullet: bool = False) -> Paragraph:
     p = new_paragraph_after(heading_p)
+    cleaned = re.sub(r"^\s*[•\-–—]\s*", "", text or "")
+    p.add_run(normalise_punctuation(cleaned or " "))
     if bullet:
-        p.add_run("• ")
-    p.add_run(normalise_punctuation(text or " "))
-    apply_style_if_exists(p, CV_BULLET if bullet else CV_BODY) or apply_style_if_exists(p, "Normal")
+        apply_style_if_exists(p, CV_BULLET) or apply_style_if_exists(p, "List Bullet")
+    else:
+        apply_style_if_exists(p, CV_BODY) or apply_style_if_exists(p, "Normal")
     ensure_font_calibri_10(p)
     return p
 
-def _clear_filler_after(heading_p: Paragraph, max_to_clear: int = 60) -> None:
-    # Remove placeholder lines/tables immediately following a heading (paragraph siblings and first table).
+# --- NEW: robust placeholder detector (handles 'Xxxxxxxxxxx.' bullets etc.) ---
+def _is_placeholder_text(s: str) -> bool:
+    if not s:
+        return True
+    t = (s or "").strip()
+    # Strip common punctuation/spaces
+    core = re.sub(r"[\s\.,;:!\-–—_]+", "", t)
+    if not core:
+        return True
+    # If 80%+ of remaining chars are 'x' (any case), treat as placeholder
+    x_count = sum(1 for ch in core if ch.lower() == "x")
+    if x_count / len(core) >= 0.8 and len(core) >= 5:
+        return True
+    # Obvious keywords
+    if re.search(r"(?i)start\s*date|job\s*title|most recent", t):
+        return True
+    return False
+
+def _clear_filler_after(heading_p: Paragraph, max_to_clear: int = 80) -> None:
     from docx.text.paragraph import Paragraph as P
-
-    cleared = 0
     el = heading_p._p.getnext()
-
+    cleared = 0
     while el is not None and cleared < max_to_clear:
         tag = el.tag.lower()
         if tag.endswith("tbl"):
-            # Inspect first table: if it looks like a placeholder (keywords or many Xs), remove it
             tbl = el
             text_fragments = []
             for row in tbl.xpath(".//w:tr", namespaces=tbl.nsmap):
@@ -155,69 +162,63 @@ def _clear_filler_after(heading_p: Paragraph, max_to_clear: int = 60) -> None:
                         if texts:
                             text_fragments.append("".join(texts))
             table_text = "\n".join(text_fragments)
-            if (
-                re.search(r"(?i)start\s*date|job\s*title|most recent", table_text)
-                or re.search(r"x{6,}", table_text, flags=re.I)
-            ):
+            if _is_placeholder_text(table_text):
                 parent = el.getparent(); parent.remove(el); cleared += 1
-                el = heading_p._p.getnext()
-                continue
+                el = heading_p._p.getnext(); continue
             else:
-                break  # real table, stop clearing
-
+                break
         elif tag.endswith("p"):
+            from docx.text.paragraph import Paragraph as P
             para = P(el, heading_p._parent)
-            text = (para.text or "").strip()
+            txt = (para.text or "").strip()
             style_name = getattr(getattr(para, "style", None), "name", "") or ""
             if "heading" in style_name.lower() or "title" in style_name.lower():
                 break
-            if any(rx.search(text) for rx in FILLER_PATTERNS):
+            if _is_placeholder_text(txt) or any(rx.search(txt) for rx in FILLER_PATTERNS):
                 parent = para._element.getparent(); parent.remove(para._element)
                 cleared += 1; el = heading_p._p.getnext(); continue
-            # Stop at first non-filler paragraph
             break
         else:
             break
 
-def _looks_like_bullet(s: str) -> bool:
-    return bool(re.match(r"^\s*(?:•|-|–|—|\u2022)", s))
-
-def _split_header_and_body(lines: List[str]) -> Tuple[str, List[str], List[str]]:
-    # Return (header_line, info_lines, body_lines).
-    if not lines:
-        return "", [], []
-    header = lines[0].strip()
-    info_lines = []
-    i = 1
-    while i < len(lines):
-        t = lines[i].strip()
-        if not t:
-            i += 1; continue
-        if _looks_like_bullet(t) or re.match(r"(?i)^responsibilit(y|ies)\s*:", t):
-            break
-        # short company/location/info lines
-        if len(t) <= 80:
-            info_lines.append(t)
-            i += 1; continue
-        break
-    # Skip an explicit "Responsibilities:" line
-    if i < len(lines) and re.match(r"(?i)^responsibilit(y|ies)\s*:", lines[i].strip()):
-        i += 1
-    body = [l for l in lines[i:] if l.strip()]
-    return header, info_lines, body
+def _purge_placeholders_in_section(head_p: Paragraph) -> None:
+    """Remove remaining placeholder paragraphs/tables until the next heading."""
+    from docx.text.paragraph import Paragraph as P
+    el = head_p._p.getnext()
+    while el is not None:
+        tag = el.tag.lower()
+        if tag.endswith("p"):
+            para = P(el, head_p._parent)
+            style_name = getattr(getattr(para, "style", None), "name", "") or ""
+            if "heading" in style_name.lower() or "title" in style_name.lower():
+                break
+            txt = (para.text or "").strip()
+            if _is_placeholder_text(txt) or any(rx.search(txt) for rx in FILLER_PATTERNS):
+                parent = para._element.getparent(); parent.remove(para._element)
+                el = head_p._p.getnext(); continue
+        elif tag.endswith("tbl"):
+            tbl = el
+            text_fragments = []
+            for row in tbl.xpath(".//w:tr", namespaces=tbl.nsmap):
+                for cell in row.xpath(".//w:tc", namespaces=tbl.nsmap):
+                    for p in cell.xpath(".//w:p", namespaces=tbl.nsmap):
+                        texts = [t.text for t in p.xpath(".//w:t", namespaces=p.nsmap) if t.text]
+                        if texts: text_fragments.append("".join(texts))
+            if _is_placeholder_text("\n".join(text_fragments)):
+                parent = el.getparent(); parent.remove(el)
+                el = head_p._p.getnext(); continue
+        el = el.getnext()
 
 def autofill_by_labels(template_path: str, output_path: str, mapping: Dict[str, str], meta: Optional[Dict[str, str]] = None) -> Dict[str, int]:
     doc = Document(template_path)
     changes = 0
 
-    # --- Header first line ---
     name = (mapping.get("NAME") or "").strip()
     title_p = _find_title_paragraph(doc)
     header_text = f"CURRICULUM VITAE FOR {name}" if name else "CURRICULUM VITAE"
     if title_p is not None:
         _replace_paragraph_text(title_p, letter_space_two(header_text), bold=True); changes += 1
 
-    # --- Location line ---
     location = (mapping.get("LOCATION") or "CANDIDATE LOCATION").strip()
     loc_nodes = _find_location_placeholders(doc)
     if loc_nodes:
@@ -228,51 +229,59 @@ def autofill_by_labels(template_path: str, output_path: str, mapping: Dict[str, 
             after = new_paragraph_after(title_p)
             _replace_paragraph_text(after, letter_space_two(location), bold=True); changes += 1
 
-    # --- Summary ---
     if mapping.get("SUMMARY"):
         p_sum = _find_heading(doc, "summary") or doc.add_heading("Personal Profile", level=2)
         _clear_filler_after(p_sum)
         for line in (mapping["SUMMARY"] or "").splitlines():
             p_sum = _insert_paragraph_after(p_sum, line, bullet=False)
+        _purge_placeholders_in_section(p_sum)
         changes += 1
 
-    # --- Experience (improved) ---
     if mapping.get("EXPERIENCE"):
         p_head = _find_heading(doc, "experience") or doc.add_heading("Employment History", level=2)
         _clear_filler_after(p_head)
+        _purge_placeholders_in_section(p_head)
         entries = _split_experience_entries(mapping["EXPERIENCE"])
         anchor = p_head
         for entry in entries:
             lines = [l for l in entry.splitlines() if l.strip()]
             if not lines:
                 continue
-            header, info_lines, body_lines = _split_header_and_body(lines)
-            # Parse header into (company, title, dates)
+            header = lines[0]
             m = re.search(DATE_RANGE_RE, header)
             dates = m.group(0) if m else ""
             core = header
             if dates:
                 core = core.replace(dates, "").strip(" -—–,\t:")
-            # Heuristic split into company/title
             company = core.split("—")[0].split("-")[0].strip()
             title = core.replace(company, "", 1).strip(" -—–,\t")
-            # Prepare info string (e.g., address / location)
+
+            info_lines = []
+            i = 1
+            while i < len(lines):
+                t = lines[i].strip()
+                if not t:
+                    i += 1; continue
+                if re.match(r"(?i)^responsibilit(y|ies)\s*:", t) or re.match(r"^\s*[•\-–—]\s*", t):
+                    break
+                if len(t) <= 80:
+                    info_lines.append(t); i += 1; continue
+                break
+            if i < len(lines) and re.match(r"(?i)^responsibilit(y|ies)\s*:", lines[i].strip()):
+                i += 1
+            body_lines = [l for l in lines[i:] if l.strip()]
             info = ", ".join(info_lines)
-            # Insert header
+
             header_p = new_paragraph_after(anchor)
             _format_company_header(header_p, company, title, dates, info=info); changes += 1
-            # Insert bullets
+
             for bl in body_lines:
                 if re.match(r"(?i)^responsibilit(y|ies)\s*:", bl.strip()):
                     continue
-                bp = new_paragraph_after(header_p)
-                bp.add_run("• " + normalise_punctuation(bl))
-                apply_style_if_exists(bp, CV_BULLET) or apply_style_if_exists(bp, "List Bullet")
-                ensure_font_calibri_10(bp)
-                header_p = bp
+                header_p = _insert_paragraph_after(header_p, bl, bullet=True)
             anchor = header_p
+        _purge_placeholders_in_section(p_head)
 
-    # --- Skills ---
     if mapping.get("SKILLS"):
         p_sk = _find_heading(doc, "skills") or doc.add_heading("Key Skills", level=2)
         _clear_filler_after(p_sk)
@@ -280,14 +289,15 @@ def autofill_by_labels(template_path: str, output_path: str, mapping: Dict[str, 
             if not skill.strip():
                 continue
             p_sk = _insert_paragraph_after(p_sk, skill, bullet=True)
+        _purge_placeholders_in_section(p_sk)
         changes += 1
 
-    # --- Education ---
     if mapping.get("EDUCATION"):
         p_edu = _find_heading(doc, "education") or doc.add_heading("Education", level=2)
         _clear_filler_after(p_edu)
         for line in (mapping["EDUCATION"] or "").splitlines():
             p_edu = _insert_paragraph_after(p_edu, line, bullet=False)
+        _purge_placeholders_in_section(p_edu)
         changes += 1
 
     doc.save(output_path)
