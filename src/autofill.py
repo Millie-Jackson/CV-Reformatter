@@ -22,6 +22,7 @@ LABELS = {
 }
 
 FILLER_PATTERNS = [
+    re.compile(r"^other\s+headings?\b", re.I),
     re.compile(r"^x{5,}$", re.I),
     re.compile(r"^list most recent first\.?$", re.I),
     re.compile(r"^start\s*date", re.I),
@@ -209,6 +210,24 @@ def _purge_placeholders_in_section(head_p: Paragraph) -> None:
                 el = head_p._p.getnext(); continue
         el = el.getnext()
 
+
+def _remove_global_template_labels(doc: Document) -> None:
+    """Remove generic template notes like 'OTHER HEADINGS' anywhere in the doc (paragraphs or table cells)."""
+    import docx
+    rx = re.compile(r"(?i)^\s*other\s+headings?\s*$")
+    # Paragraphs
+    for p in list(doc.paragraphs):
+        if rx.match((p.text or "").strip()):
+            parent = p._element.getparent()
+            parent.remove(p._element)
+    # Tables
+    for tbl in doc.tables:
+        for row in tbl.rows:
+            for cell in row.cells:
+                for p in list(cell.paragraphs):
+                    if rx.match((p.text or "").strip()):
+                        par_el = p._element
+                        par_el.getparent().remove(par_el)
 def autofill_by_labels(template_path: str, output_path: str, mapping: Dict[str, str], meta: Optional[Dict[str, str]] = None) -> Dict[str, int]:
     doc = Document(template_path)
     changes = 0
@@ -300,5 +319,6 @@ def autofill_by_labels(template_path: str, output_path: str, mapping: Dict[str, 
         _purge_placeholders_in_section(p_edu)
         changes += 1
 
+    _remove_global_template_labels(doc)
     doc.save(output_path)
     return {"changes": changes}
