@@ -2,13 +2,11 @@
 import argparse, json, os, re
 from typing import List, Dict, Optional, Union
 from docx import Document
-from docx.shared import Pt, Cm
+from docx.shared import Pt
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-# --------------------------
-# IO
-# --------------------------
+# ============== IO ==============
 def load_json(path: str) -> Dict:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -25,9 +23,7 @@ def find_template(path_arg: Optional[str]) -> str:
             return c
     raise FileNotFoundError("Template .docx not found. Pass with -t/--template.")
 
-# --------------------------
-# Paragraph utilities
-# --------------------------
+# ============== Paragraph utils ==============
 def delete_paragraph(p):
     p._element.getparent().remove(p._element)
 
@@ -43,8 +39,10 @@ def insert_paragraph_after(paragraph, text: str = ""):
 def set_run(run, *, name="Calibri", size_pt=10, bold=False, italic=False, all_caps=False):
     run.font.name = name
     run.font.size = Pt(size_pt)
-    run.font.bold = bold
-    run.font.italic = italic
+    if bold is not None:
+        run.font.bold = bold
+    if italic is not None:
+        run.font.italic = italic
     run.font.all_caps = all_caps
 
 def format_paragraph(p, *, font_name="Calibri", font_size_pt=10, bold=False, italic=False, all_caps=False, space_after_pt=0):
@@ -56,18 +54,12 @@ def format_paragraph(p, *, font_name="Calibri", font_size_pt=10, bold=False, ita
             set_run(r, name=font_name, size_pt=font_size_pt, bold=bold, italic=italic, all_caps=all_caps)
     p.paragraph_format.space_after = Pt(space_after_pt)
 
-def add_left_tabstop(p, pos_cm: float = 3.1):
-    """Ensure a left tab stop at pos_cm from the margin for two-column layout."""
-    pPr = p._p.get_or_add_pPr()
-    tabs = pPr.find(qn('w:tabs'))
-    if tabs is None:
-        tabs = OxmlElement('w:tabs')
-        pPr.append(tabs)
-    # Add a left tab at specified position
-    tab = OxmlElement('w:tab')
-    tab.set(qn('w:val'), 'left')
-    tab.set(qn('w:pos'), str(int(Cm(pos_cm).emu)))
-    tabs.append(tab)
+def set_hanging_indent(p, left_pt=18, first_line_pt=-9):
+    """Hanging indent so wrapped lines align under the bullet text."""
+    fmt = p.paragraph_format
+    fmt.left_indent = Pt(left_pt)
+    fmt.first_line_indent = Pt(first_line_pt)
+    fmt.space_after = Pt(0)
 
 def find_paragraph(doc: Document, predicate) -> Optional[int]:
     for i, p in enumerate(doc.paragraphs):
@@ -87,33 +79,209 @@ def _year_key(dates: str) -> int:
     m = re.findall(r"(19|20)\d{2}", dates or "")
     return int(m[-1]) if m else -1
 
-# --------------------------
-# Normalisers
-# --------------------------
+# ============== Heading styles & helpers ==============
+def _apply_heading_borders(p):
+    """Ensure top/bottom blue rules on a heading paragraph (matches template look)."""
+    pPr = p._p.get_or_add_pPr()
+    pBdr = pPr.find(qn('w:pBdr'))
+    if pBdr is None:
+        pBdr = OxmlElement('w:pBdr')
+        pPr.append(pBdr)
+    def ensure_edge(edge):
+        el = pBdr.find(qn(f'w:{edge}'))
+        if el is None:
+            el = OxmlElement(f'w:{edge}')
+            pBdr.append(el)
+        el.set(qn('w:val'), 'single')
+        el.set(qn('w:sz'), '6')
+        el.set(qn('w:space'), '1')
+        el.set(qn('w:color'), '4F81BD')  # template blue
+    ensure_edge('top'); ensure_edge('bottom')
+
+def apply_heading_style(doc: Document, heading_text: str):
+    from docx.shared import RGBColor
+    idx = find_heading_index(doc, heading_text)
+    if idx is not None:
+        p = doc.paragraphs[idx]
+        p.text = heading_text.upper()
+        if not p.runs:
+            p.add_run("")
+        for r in p.runs:
+            set_run(r, name="Calibri", size_pt=10, bold=False, italic=True, all_caps=True)
+            r.font.color.rgb = RGBColor(79, 129, 189)
+        p.paragraph_format.space_after = Pt(0)
+
+def _find_first_heading_index(doc: Document, aliases: list) -> Optional[int]:
+    for a in aliases:
+        idx = find_heading_index(doc, a)
+        if idx is not None:
+            return idx
+    return None
+
+def _ensure_heading(doc: Document, target: str, aliases: list, before_aliases: list) -> int:
+    """
+    Ensure a heading with exact `target` exists.
+    Reuse alias paragraph if present (preserves borders). If we create one, add blue borders.
+    """
+    idx = _find_first_heading_index(doc, [target] + aliases)
+    if idx is not None:
+        para = doc.paragraphs[idx]
+        para.text = target
+        apply_heading_style(doc, target)
+        _apply_heading_borders(para)
+        return idx
+
+    before_idx = _find_first_heading_index(doc, before_aliases) if before_aliases else None
+
+    if before_idx is None:
+        from docx.text.paragraph import Paragraph as Para
+        new_p = OxmlElement("w:p")
+        doc._body._body.append(new_p)
+        p_obj = Para(new_p, doc._body)
+    else:
+        ref_p = doc.paragraphs[before_idx]
+        new_p = OxmlElement("w:p")
+        ref_p._p.addprevious(new_p)
+        from docx.text.paragraph import Paragraph as Para
+        p_obj = Para(new_p, ref_p._parent)
+
+    p_obj.text = target
+    apply_heading_style(doc, target)
+    _apply_heading_borders(p_obj)
+    return find_heading_index(doc, target)
+
+def style_first_two_lines(doc: Document, name_line_text: str, location_text: str):
+    # Line 1
+    idx = startswith_line(doc, "CURRICULUM VITAE FOR")
+    if idx is not None:
+        p = doc.paragraphs[idx]; p.text = ""
+        parts = ["CURRICULUM", " ", "VITAE", " ", "FOR", " ", name_line_text.upper() if name_line_text else ""]
+        for part in parts:
+            r = p.add_run(part)
+            set_run(r, name="Calibri", size_pt=12, bold=True, italic=False)
+        for r in p.runs:
+            r.font.bold = True  # enforce bold
+
+    # Line 2
+    lidx = startswith_line(doc, "CANDIDATE LOCATION")
+    if lidx is not None:
+        p = doc.paragraphs[lidx]; p.text = ""
+        left = "CANDIDATE LOCATION:"
+        right = f" {location_text.upper()}" if location_text else ""
+        r1 = p.add_run(left); set_run(r1, name="Calibri", size_pt=12, bold=True, italic=False)
+        r2 = p.add_run(right); set_run(r2, name="Calibri", size_pt=12, bold=True, italic=False)
+        for r in p.runs:
+            r.font.bold = True  # enforce bold
+
+def ensure_body_font(doc: Document):
+    # Preserve existing bold/italic; only normalise font family & size for body text
+    for p in doc.paragraphs:
+        txt = p.text.strip()
+        # Skip headings (all-caps short) and the two header lines
+        if (txt.isupper() and len(txt) <= 32) or txt.startswith("CURRICULUM VITAE FOR") or txt.startswith("CANDIDATE LOCATION"):
+            continue
+        for r in p.runs:
+            if r.text.strip():
+                r.font.name = "Calibri"
+                r.font.size = Pt(10)
+                # Do not touch bold/italic
+
+def get_bullet_style(doc: Document):
+    try: return doc.styles["CV Bullet"]
+    except KeyError:
+        try: return doc.styles["List Bullet"]
+        except KeyError: return None
+
+# ============== Placeholder utilities ==============
+
+def _strip_placeholders_after_heading(doc: Document, heading_text: str, max_lines: int = 25):
+    h = find_heading_index(doc, heading_text)
+    if h is None: return
+    i = h + 1
+    while i < len(doc.paragraphs) and i <= h + max_lines:
+        txt = doc.paragraphs[i].text.strip()
+        low = txt.lower().replace("–", "-")  # normalise dash
+        if txt and txt.isupper() and len(txt) > 3:
+            break
+        # Known template placeholders to strip
+        placeholders = [
+            "list most recent first",
+            "educational establishment",
+            "awards obtained",
+            "name of establishment",
+            "title of qualification",
+            "date",
+            "start date - end date",
+            "company info italic",
+            "job title",
+            "company, location or company info",
+        ]
+        if (not txt) or any(p in low for p in placeholders):
+            delete_paragraph(doc.paragraphs[i]); continue
+        else:
+            break
+def _remove_section(doc: Document, heading_text: str):
+    idx = find_heading_index(doc, heading_text)
+    if idx is None:
+        return
+    # Delete the heading itself
+    delete_paragraph(doc.paragraphs[idx])
+    # Delete everything until the next recognised heading or end
+    while idx < len(doc.paragraphs):
+        if idx >= len(doc.paragraphs):
+            break
+        txt = doc.paragraphs[idx].text.strip()
+        if txt.isupper() and len(txt) > 3:
+            break
+        delete_paragraph(doc.paragraphs[idx])
+(doc: Document, heading_text: str):
+    idx = find_heading_index(doc, heading_text)
+    if idx is None:
+        return
+    # Delete the heading itself
+    delete_paragraph(doc.paragraphs[idx])
+    # Delete everything until the next recognised heading or end
+    while idx < len(doc.paragraphs):
+        if idx >= len(doc.paragraphs):
+            break
+        txt = doc.paragraphs[idx].text.strip()
+        if txt.isupper() and len(txt) > 3:
+            break
+        delete_paragraph(doc.paragraphs[idx])
+
+
+def _remove_x_placeholders(doc: Document):
+    i = 0
+    while i < len(doc.paragraphs):
+        txt = doc.paragraphs[i].text.strip()
+        if not txt: i += 1; continue
+        collapsed = re.sub(r"[^xX]", "", txt)
+        if len(collapsed) >= max(8, int(0.6*len(txt))):
+            delete_paragraph(doc.paragraphs[i]); continue
+        i += 1
+
+# ============== Normalisers ==============
 def _normalise_skills(skills: Union[Dict, List, str, None]) -> List[str]:
-    """
-    Flatten skills; keep each line/entry as ONE bullet.
-    Split order preference: double-newline, then ';', then single newline.
-    Never split on '.'
-    """
     items: List[str] = []
     if skills is None:
         return items
 
+    def normalise_chunk(s: str) -> str:
+        if not s:
+            return ""
+        s = re.sub(r"-\s*[\r\n]+\s*", "", s)   # un-hyphenate
+        s = re.sub(r"[\r\n]+", " ", s)         # merge soft wraps
+        s = re.sub(r"\s+", " ", s)
+        return s.strip(" •-\t.")
+
     def extend_from_text(s: str):
         if not s:
             return
-        # prefer double newline
-        if "\n\n" in s:
-            parts = s.split("\n\n")
-        elif ";" in s:
-            parts = s.split(";")
-        else:
-            parts = s.split("\n")
+        parts = re.split(r"\n{2,}|;", s)
         for part in parts:
-            part = part.strip(" -•\t")
-            if part:
-                items.append(part)
+            clean = normalise_chunk(part)
+            if clean:
+                items.append(clean)
 
     if isinstance(skills, list):
         for x in skills:
@@ -128,105 +296,19 @@ def _normalise_skills(skills: Union[Dict, List, str, None]) -> List[str]:
     elif isinstance(skills, str):
         extend_from_text(skills)
     else:
-        items.append(str(skills).strip())
+        norm = normalise_chunk(str(skills))
+        if norm:
+            items.append(norm)
 
-    # de-dupe preserving order
+    # de-dupe
     seen = set(); out = []
     for s in items:
-        key = s.lower()
-        if s and key not in seen:
-            seen.add(key); out.append(s)
+        k = s.lower()
+        if s and k not in seen:
+            seen.add(k); out.append(s)
     return out
 
-# --------------------------
-# Heading & body styling
-# --------------------------
-
-def apply_heading_style(doc: Document, heading_text: str):
-    from docx.shared import RGBColor
-    idx = find_heading_index(doc, heading_text)
-    if idx is not None:
-        p = doc.paragraphs[idx]
-        p.text = heading_text.upper()
-        # Ensure at least one run exists
-        if not p.runs:
-            p.add_run("")
-        # Style all runs: Calibri 10, italic, blue, NOT bold
-        for r in p.runs:
-            set_run(r, name="Calibri", size_pt=10, bold=False, italic=True, all_caps=True)
-            r.font.color.rgb = RGBColor(79, 129, 189)  # match template blue
-        p.paragraph_format.space_after = Pt(0)
-
-
-def style_first_two_lines(doc: Document, name_line_text: str, location_text: str):
-    idx = startswith_line(doc, "CURRICULUM VITAE FOR")
-    if idx is not None:
-        p = doc.paragraphs[idx]; p.text = ""
-        parts = ["CURRICULUM", " ", "VITAE", " ", "FOR", " ", name_line_text.upper() if name_line_text else ""]
-        for part in parts:
-            r = p.add_run(part); set_run(r, name="Calibri", size_pt=12, bold=True)
-    lidx = startswith_line(doc, "CANDIDATE LOCATION")
-    if lidx is not None:
-        p = doc.paragraphs[lidx]; p.text = ""
-        left = "CANDIDATE LOCATION:"; right = f" {location_text.upper()}" if location_text else ""
-        r1 = p.add_run(left); set_run(r1, name="Calibri", size_pt=12, bold=True)
-        r2 = p.add_run(right); set_run(r2, name="Calibri", size_pt=12, bold=True)
-
-def ensure_body_font(doc: Document):
-    for p in doc.paragraphs:
-        txt = p.text.strip()
-        if txt.isupper() and len(txt) <= 26:
-            continue
-        for r in p.runs:
-            if r.text.strip():
-                set_run(r, name="Calibri", size_pt=10)
-
-def get_bullet_style(doc: Document):
-    try: return doc.styles["CV Bullet"]
-    except KeyError:
-        try: return doc.styles["List Bullet"]
-        except KeyError: return None
-
-# --------------------------
-# Placeholder utilities
-# --------------------------
-def _strip_placeholders_after_heading(doc: Document, heading_text: str, max_lines: int = 25):
-    """Remove 'List most recent first.' and guide rows under a heading."""
-    h = find_heading_index(doc, heading_text)
-    if h is None: return
-    i = h + 1
-    while i < len(doc.paragraphs) and i <= h + max_lines:
-        txt = doc.paragraphs[i].text.strip()
-        low = txt.lower()
-        # stop at next ALLCAPS heading (not counting blanks)
-        if txt and txt.isupper() and len(txt) > 3:
-            break
-        if (not txt) or low.startswith("list most recent first") or \
-           "educational establishment" in low or "awards obtained" in low or \
-           "name of establishment" in low or "title of qualification" in low or \
-           low == "date" or low.startswith("date "):
-            delete_paragraph(doc.paragraphs[i])
-            continue  # do not inc; list shrank
-        else:
-            # first real content encountered; stop placeholder sweep
-            break
-
-def _remove_section(doc: Document, heading_text: str):
-    idx = find_heading_index(doc, heading_text)
-    if idx is None: return
-    # delete heading
-    delete_paragraph(doc.paragraphs[idx])
-    # delete subsequent lines until next ALLCAPS heading or end
-    while idx < len(doc.paragraphs):
-        if idx >= len(doc.paragraphs): break
-        txt = doc.paragraphs[idx].text.strip()
-        if txt and txt.isupper() and len(txt) > 3:
-            break
-        delete_paragraph(doc.paragraphs[idx])
-
-# --------------------------
-# Section writers
-# --------------------------
+# ============== Writers ==============
 def write_header(doc: Document, fields: Dict) -> None:
     name = (fields.get("name") or "").strip()
     location = (fields.get("location") or "").strip()
@@ -244,68 +326,42 @@ def write_skills(doc: Document, fields: Dict) -> None:
     if h_idx is None: return
     apply_heading_style(doc, "KEY SKILLS")
     _strip_placeholders_after_heading(doc, "KEY SKILLS")
-    # Ensure exactly one spacer line after heading
     after = doc.paragraphs[h_idx]
-    spacer = insert_paragraph_after(after, "")
-    format_paragraph(spacer, font_name="Calibri", font_size_pt=10, space_after_pt=0)
-    # bullets
+    spacer = insert_paragraph_after(after, ""); format_paragraph(spacer, font_name="Calibri", font_size_pt=10, space_after_pt=0)
     skills_items = _normalise_skills(fields.get("skills"))
     if not skills_items: return
     bullet_style = get_bullet_style(doc)
     prev = spacer
     for s in skills_items:
-        p = insert_paragraph_after(prev, s)  # no manual bullet prefix
+        p = insert_paragraph_after(prev, s)
         if bullet_style: p.style = bullet_style
         format_paragraph(p, font_name="Calibri", font_size_pt=10, space_after_pt=0)
+        set_hanging_indent(p)
         prev = p
 
 def write_education(doc: Document, education: List[Dict]) -> None:
     apply_heading_style(doc, "EDUCATION")
     _strip_placeholders_after_heading(doc, "EDUCATION")
     anchor = doc.paragraphs[find_heading_index(doc, "EDUCATION")]
-    # one spacer after heading
-    spacer0 = insert_paragraph_after(anchor, "")
-    format_paragraph(spacer0, font_name="Calibri", font_size_pt=10, space_after_pt=0)
+    spacer0 = insert_paragraph_after(anchor, ""); format_paragraph(spacer0, font_name="Calibri", font_size_pt=10, space_after_pt=0)
     after = spacer0
     for j, e in enumerate(sorted(education or [], key=lambda x: _year_key(x.get("dates","")), reverse=True)):
         year = (e.get("dates") or "").strip()
         inst = (e.get("institution") or "").strip()
         deg  = (e.get("degree") or e.get("title") or "").strip()
         res  = (e.get("result") or "").strip()
-        # first line: year + institution using template's built-in tab settings
-        p1 = insert_paragraph_after(after, year + "			" + inst)
+        p1 = insert_paragraph_after(after, year + "\t\t\t" + inst)
         format_paragraph(p1, font_name="Calibri", font_size_pt=10, space_after_pt=0)
         last = p1
         if deg:
-            p2 = insert_paragraph_after(p1, "			" + deg)
-            format_paragraph(p2, font_name="Calibri", font_size_pt=10, space_after_pt=0)
-            last = p2
+            p2 = insert_paragraph_after(p1, "\t\t\t" + deg); format_paragraph(p2, font_name="Calibri", font_size_pt=10, space_after_pt=0); last = p2
         if res:
-            p3 = insert_paragraph_after(last, "			" + res)
-            format_paragraph(p3, font_name="Calibri", font_size_pt=10, space_after_pt=0)
-            last = p3
+            p3 = insert_paragraph_after(last, "\t\t\t" + res); format_paragraph(p3, font_name="Calibri", font_size_pt=10, space_after_pt=0); last = p3
         if j != len(education)-1:
-            spacer = insert_paragraph_after(last, "")
-            format_paragraph(spacer, font_name="Calibri", font_size_pt=10, space_after_pt=0)
-            after = spacer
+            spacer = insert_paragraph_after(last, ""); format_paragraph(spacer, font_name="Calibri", font_size_pt=10, space_after_pt=0); after = spacer
         else:
             after = last
 
-
-def _remove_x_placeholders(doc: Document):
-    """Remove any 'Xxxxxx...' placeholder paragraphs anywhere in the doc."""
-    i = 0
-    while i < len(doc.paragraphs):
-        txt = doc.paragraphs[i].text.strip()
-        if not txt:
-            i += 1
-            continue
-        # Normalize and check if comprised mostly of x/X and punctuation/spaces
-        collapsed = re.sub(r"[^xX]", "", txt)
-        if len(collapsed) >= max(8, int(0.6*len(txt))):
-            delete_paragraph(doc.paragraphs[i])
-            continue
-        i += 1
 def write_qualifications(doc: Document, quals: List[Dict]) -> None:
     if not quals:
         _remove_section(doc, "QUALIFICATIONS")
@@ -313,33 +369,27 @@ def write_qualifications(doc: Document, quals: List[Dict]) -> None:
     apply_heading_style(doc, "QUALIFICATIONS")
     _strip_placeholders_after_heading(doc, "QUALIFICATIONS")
     anchor = doc.paragraphs[find_heading_index(doc, "QUALIFICATIONS")]
-    spacer0 = insert_paragraph_after(anchor, "")
-    format_paragraph(spacer0, font_name="Calibri", font_size_pt=10, space_after_pt=0)
+    spacer0 = insert_paragraph_after(anchor, ""); format_paragraph(spacer0, font_name="Calibri", font_size_pt=10, space_after_pt=0)
     after = spacer0
     for j, e in enumerate(sorted(quals or [], key=lambda x: _year_key(x.get("dates","")), reverse=True)):
         year = (e.get("dates") or "").strip()
         inst = (e.get("institution") or "").strip()
         title  = (e.get("degree") or e.get("title") or "").strip()
         res  = (e.get("result") or "").strip()
-        p1 = insert_paragraph_after(after, year + "			" + inst)
+        p1 = insert_paragraph_after(after, year + "\t\t\t" + inst)
         format_paragraph(p1, font_name="Calibri", font_size_pt=10, space_after_pt=0)
         last = p1
         if title:
-            p2 = insert_paragraph_after(p1, "			" + title)
-            format_paragraph(p2, font_name="Calibri", font_size_pt=10, space_after_pt=0)
-            last = p2
+            p2 = insert_paragraph_after(p1, "\t\t\t" + title); format_paragraph(p2, font_name="Calibri", font_size_pt=10, space_after_pt=0); last = p2
         if res:
-            p3 = insert_paragraph_after(last, "			" + res)
-            format_paragraph(p3, font_name="Calibri", font_size_pt=10, space_after_pt=0)
-            last = p3
+            p3 = insert_paragraph_after(last, "\t\t\t" + res); format_paragraph(p3, font_name="Calibri", font_size_pt=10, space_after_pt=0); last = p3
         if j != len(quals)-1:
-            spacer = insert_paragraph_after(last, "")
-            format_paragraph(spacer, font_name="Calibri", font_size_pt=10, space_after_pt=0)
-            after = spacer
+            spacer = insert_paragraph_after(last, ""); format_paragraph(spacer, font_name="Calibri", font_size_pt=10, space_after_pt=0); after = spacer
         else:
             after = last
+
 def write_experience(doc: Document, fields: Dict) -> None:
-    # support multiple heading aliases, including EMPLOYMENT HISTORY
+    # Support multiple heading aliases
     heading_aliases = ["EXPERIENCE", "PROFESSIONAL EXPERIENCE", "WORK EXPERIENCE", "EMPLOYMENT HISTORY"]
     h_idx = None; chosen = None
     for cand in heading_aliases:
@@ -348,10 +398,13 @@ def write_experience(doc: Document, fields: Dict) -> None:
             chosen = cand; break
     if h_idx is None:
         return
+
     apply_heading_style(doc, chosen)
     _strip_placeholders_after_heading(doc, chosen)
+
     anchor = doc.paragraphs[h_idx]
-    spacer0 = insert_paragraph_after(anchor, ""); format_paragraph(spacer0, font_name="Calibri", font_size_pt=10, space_after_pt=0)
+    spacer0 = insert_paragraph_after(anchor, "")
+    format_paragraph(spacer0, font_name="Calibri", font_size_pt=10, space_after_pt=0)
     after = spacer0
 
     exp = fields.get("experience") or []
@@ -359,39 +412,57 @@ def write_experience(doc: Document, fields: Dict) -> None:
     exp_sorted = sorted(exp, key=item_key, reverse=True)
 
     bullet_style = get_bullet_style(doc)
+
     for e in exp_sorted:
         dates = (e.get("dates") or "").strip()
         company = (e.get("company") or "").strip()
-        title = (e.get("job_title") or e.get("title") or "").strip()
+        jt_raw = (e.get("job_title") or e.get("title") or "").strip()
         desc = (e.get("description") or "").strip()
 
+        # Split job_title field into Title (line 1) and Intro (subsequent lines)
+        jt_lines = [s for s in re.split(r"\r?\n", jt_raw) if s.strip()]
+        title = jt_lines[0] if jt_lines else ""
+        intro = " ".join(jt_lines[1:]).strip()
+
         # Two blank lines before each entry
-        gap1 = insert_paragraph_after(after, ""); format_paragraph(gap1, font_name="Calibri", font_size_pt=10, space_after_pt=0)
-        gap2 = insert_paragraph_after(gap1, ""); format_paragraph(gap2, font_name="Calibri", font_size_pt=10, space_after_pt=0)
+        gap1 = insert_paragraph_after(after, "")
+        format_paragraph(gap1, font_name="Calibri", font_size_pt=10, space_after_pt=0)
+        gap2 = insert_paragraph_after(gap1, "")
+        format_paragraph(gap2, font_name="Calibri", font_size_pt=10, space_after_pt=0)
 
-        # dates + company in same line, bold; company italic
+        # Line 1: dates (bold) + company (BOLD UPPERCASE)
         p1 = insert_paragraph_after(gap2, "")
-        r1 = p1.add_run(dates + "\t\t\t"); set_run(r1, name="Calibri", size_pt=10, bold=True)
-        r2 = p1.add_run(company); set_run(r2, name="Calibri", size_pt=10, bold=True, italic=True)
-
+        r1 = p1.add_run(dates + "\t\t\t"); set_run(r1, name="Calibri", size_pt=10, bold=True, italic=False)
+        r2 = p1.add_run(company.upper()); set_run(r2, name="Calibri", size_pt=10, bold=True, italic=False)
         last = p1
+
+        # Line 2: job title (bold)
         if title:
             p2 = insert_paragraph_after(p1, "\t\t\t" + title)
-            for r in p2.runs: set_run(r, name="Calibri", size_pt=10, bold=True)
+            for r in p2.runs: set_run(r, name="Calibri", size_pt=10, bold=True, italic=False)
             last = p2
 
+        # Line 3: intro/summary (italic)
+        if intro:
+            p3 = insert_paragraph_after(last, "\t\t\t" + intro)
+            for r in p3.runs: set_run(r, name="Calibri", size_pt=10, bold=False, italic=True)
+            last = p3
+
+        # Bullets: split ONLY on paragraph breaks or semicolons; merge soft wraps/hyphenation
         if desc:
-            # DO NOT split on '.'; split only on newlines/semicolons
-            parts = re.split(r"[;\\n]+", desc)
+            parts = re.split(r"\n{2,}|;", desc)
             for part in parts:
-                if part.strip():
-                    p = insert_paragraph_after(last, part.strip())
+                part = re.sub(r"-\s*[\r\n]+\s*", "", part)  # un-hyphenate
+                part = re.sub(r"[\r\n]+", " ", part)        # merge soft wraps
+                part = re.sub(r"\s+", " ", part).strip()
+                if part:
+                    p = insert_paragraph_after(last, part)
                     if bullet_style: p.style = bullet_style
                     format_paragraph(p, font_name="Calibri", font_size_pt=10, space_after_pt=0)
+                    set_hanging_indent(p)
                     last = p
 
         after = last
-
 
 def _as_list(value):
     if value is None:
@@ -410,31 +481,45 @@ def _as_list(value):
     return [s for s in re.split(r"[;\n]+", str(value)) if s.strip()]
 
 def _write_simple_bullet_section(doc: Document, heading: str, items) -> None:
-    """Generic writer: applies heading style, strips placeholders, adds one blank line, then bullets."""
     if not items:
         _remove_section(doc, heading)
         return
-    apply_heading_style(doc, heading)
+
+    if heading == "PROFESSIONAL DEVELOPMENT":
+        aliases = ["PERSONAL DEVELOPMENT", "DEVELOPMENT", "TRAINING"]
+        before_aliases = ["PROFESSIONAL AFFILIATIONS", "EMPLOYMENT HISTORY", "EXPERIENCE", "WORK EXPERIENCE", "PROFESSIONAL EXPERIENCE"]
+    elif heading == "PROFESSIONAL AFFILIATIONS":
+        aliases = ["AFFILIATIONS", "PROFESSIONAL MEMBERSHIPS", "MEMBERSHIPS"]
+        before_aliases = ["EMPLOYMENT HISTORY", "EXPERIENCE", "WORK EXPERIENCE", "PROFESSIONAL EXPERIENCE"]
+    else:
+        aliases = []
+        before_aliases = []
+
+    h_idx = _ensure_heading(doc, heading, aliases, before_aliases)
     _strip_placeholders_after_heading(doc, heading)
-    h_idx = find_heading_index(doc, heading)
+
     anchor = doc.paragraphs[h_idx]
     spacer = insert_paragraph_after(anchor, "")
     format_paragraph(spacer, font_name="Calibri", font_size_pt=10, space_after_pt=0)
     bullet_style = get_bullet_style(doc)
     after = spacer
-    for it in items:
-        p = insert_paragraph_after(after, str(it))
+    for it in (items if isinstance(items, list) else [items]):
+        txt = re.sub(r"-\s*[\r\n]+\s*", "", str(it))
+        txt = re.sub(r"[\r\n]+", " ", txt)
+        txt = re.sub(r"\s+", " ", txt).strip(" •-\t.")
+        p = insert_paragraph_after(after, txt)
         if bullet_style: p.style = bullet_style
         format_paragraph(p, font_name="Calibri", font_size_pt=10, space_after_pt=0)
+        set_hanging_indent(p)
         after = p
 
 def write_personal_development(doc: Document, fields: Dict) -> None:
     items = None
-    for key in ["personal_development", "development", "professional_development", "training"]:
+    for key in ["professional_development", "personal_development", "development", "training"]:
         if fields.get(key):
             items = _as_list(fields.get(key))
             break
-    _write_simple_bullet_section(doc, "PERSONAL DEVELOPMENT", items or [])
+    _write_simple_bullet_section(doc, "PROFESSIONAL DEVELOPMENT", items or [])
 
 def write_professional_affiliations(doc: Document, fields: Dict) -> None:
     items = None
@@ -444,12 +529,12 @@ def write_professional_affiliations(doc: Document, fields: Dict) -> None:
             break
     _write_simple_bullet_section(doc, "PROFESSIONAL AFFILIATIONS", items or [])
 
-# --------------------------
-# Render
-# --------------------------
+# ============== Render ==============
 def render(doc: Document, fields: Dict) -> None:
-    # Style known headings up-front
-    for hd in ["PERSONAL PROFILE", "KEY SKILLS", "EDUCATION", "QUALIFICATIONS", "PERSONAL DEVELOPMENT", "PROFESSIONAL AFFILIATIONS", "EMPLOYMENT HISTORY", "EXPERIENCE", "PROFESSIONAL EXPERIENCE", "WORK EXPERIENCE", "OTHER HEADINGS", "ADDITIONAL INFORMATION"]:
+    for hd in ["PERSONAL PROFILE", "KEY SKILLS", "EDUCATION", "QUALIFICATIONS",
+               "PERSONAL DEVELOPMENT", "PROFESSIONAL AFFILIATIONS",
+               "EMPLOYMENT HISTORY", "EXPERIENCE", "PROFESSIONAL EXPERIENCE", "WORK EXPERIENCE",
+               "OTHER HEADINGS", "ADDITIONAL INFORMATION"]:
         apply_heading_style(doc, hd)
 
     # Header lines
@@ -457,7 +542,7 @@ def render(doc: Document, fields: Dict) -> None:
     location = (fields.get("location") or "").strip()
     style_first_two_lines(doc, name, location)
 
-    # Section order (match 'Perfectly Formatted CV 1')
+    # Ordered sections
     write_summary(doc, fields)
     write_skills(doc, fields)
     write_education(doc, fields.get("education") or [])
@@ -466,19 +551,19 @@ def render(doc: Document, fields: Dict) -> None:
     write_professional_affiliations(doc, fields)
     write_experience(doc, fields)
 
-    # Suppress empty template-only sections
-    if not fields.get("other_headings"): _remove_section(doc, "OTHER HEADINGS")
+    # Suppress empties / placeholders
+    # Always remove OTHER HEADINGS (pure placeholder in template)
+    _remove_section(doc, "OTHER HEADINGS")
+    # Remove if fields absent
     if not fields.get("additional_information"): _remove_section(doc, "ADDITIONAL INFORMATION")
     if not fields.get("experience"): _remove_section(doc, "EMPLOYMENT HISTORY")
 
-    _remove_x_placeholders(doc)
+    _remove_x_placeholders(doc)(doc)
     ensure_body_font(doc)
 
-# --------------------------
-# CLI
-# --------------------------
+# ============== CLI ==============
 def main():
-    ap = argparse.ArgumentParser(description="CV Reformatter — final polish (aliases, bullets, tabs, suppression)")
+    ap = argparse.ArgumentParser(description="CV Reformatter — bold preserved + bullet hanging indent + fixed regexes")
     ap.add_argument("-f", "--fields", default="output/fields.json", help="Path to fields.json")
     ap.add_argument("-t", "--template", default=None, help="Path to .docx template")
     ap.add_argument("-o", "--output", default="output/Reformatted_CV1.docx", help="Output .docx")
