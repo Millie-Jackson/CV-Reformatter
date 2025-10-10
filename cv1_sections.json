@@ -1,0 +1,83 @@
+{
+  "name": "KRIS MATT",
+  "title": null,
+  "location": "TEDDINGTON",
+  "phone": "07912 565 793",
+  "email": "kris.matt@gmail.com",
+  "url": null,
+  "summary": "A results-driven and strategic leader with a proven track record of delivering significant value for international businesses through the design and execution of innovative commercial solutions. Combining academic excellence with extensive practical experience, I have driven organizational success across diverse management functions, including financial modelling, strategy, business development, project management, client relations, R&D, and cultural change management. As a catalyst for business transformation, I am skilled at leading change initiatives, fostering high-performance teams, and engaging stakeholders at all levels to achieve business objectives.",
+  "skills": [
+    "Strategic Development: Expertise in creating and executing solutions to align with corporate goals, driving operational efficiency, and generating bottom-line improvements. Experienced in business planning and financial modelling.",
+    "Commercial Acumen: Strong ability to identify new market opportunities, develop growth strategies, and implement entrepreneurial solutions tailored to customer needs. Proficient in market and competitor analysis.",
+    "Financial Expertise: Extensive experience in feasibility studies, investment appraisals, profit and loss management, and financial modelling to optimize shareholder value.",
+    "Operational Leadership: Proven ability to drive culture change, streamline operations, and implement cost-saving initiatives using methodologies like Kaizen and lean improvement.",
+    "People Leadership: Effective in leading organizational change, improving workforce engagement, and increasing productivity through motivational leadership and targeted morale-building strategies.",
+    "International Experience: Successful in managing operations across diverse cultural environments, including leading board-level relationships for multiple international joint ventures.",
+    "Project Management: Expertise in delivering large-scale projects on time and within budget, managing multiple stakeholders and subcontractors to achieve organizational goals."
+  ],
+  "experience": [
+    {
+      "dates": "2023 – Jan 2025",
+      "company": "FRANCHISE BRANDS",
+      "job_title": "CEO, Pirtek Europe",
+      "description": "Leading a £20m EBITDA business across 8 European countries for an AIM-listed entity. Responsible for overall strategy, P&L management, and growth initiatives.\n\nSpearheading business transformation and profitability optimization in a competitive European market.\nDriving initiatives that enhance the value proposition to customers and franchisees, leveraging operational efficiencies and market expansion."
+    },
+    {
+      "dates": "2017 – 2023",
+      "company": "PIRTEK EUROPE",
+      "job_title": "Managing Director, UK & Ireland",
+      "description": "Led the turnaround of the UK and Irish business, driving growth and profitability for a PE-backed franchise network. Oversaw P&L for the business and worked closely with franchisees to rebuild the network and improve operations.\n\nDelivered a successful turnaround strategy that resulted in over 50% of the group’s EBITDA, enabling a successful PE exit with a 4X return on investment.\nNegotiated and implemented new commercial arrangements with franchisees, generating immediate growth and laying the foundation for long-term value creation.\nIntroduced ‘growth drivers’ that significantly boosted franchisee sales through improved engagement, customer contact strategies, and channel development.\nNavigated the business through the COVID-19 lockdown, driving a 2.5X ROI and doubling EBITDA despite challenging market conditions."
+    },
+    {
+      "dates": "2014 – 2017",
+      "company": "BRAMMER GROUP",
+      "job_title": "Managing Director, Europe & Middle East",
+      "description": "Led a $60M regional business, overseeing procurement services and value-added distribution for major industrial clients.\n\nRevitalized a mature business with a 24% revenue growth in 2015 through innovative growth drivers and a customer-focused approach.\nSpearheaded a profit improvement program that delivered a 120bps increase in gross margins and a 700bps improvement in contribution margin.\nAchieved 13.1% savings for clients through cost-reduction initiatives, while enhancing business profitability and client relationships."
+    },
+    {
+      "dates": "2013 – 2014",
+      "company": "HARSCO METALS & MINERALS",
+      "job_title": "VP, Business Development",
+      "description": "Responsible for strategy development, portfolio management, and new product innovation within a $1.5bn global industrial solution provider.\n\nRefined divisional strategy to optimize resource allocation, enhancing business development focus on profitable markets and sectors.\nLed the successful launch of a new agricultural products brand in the US, generating annual revenues of $20M."
+    },
+    {
+      "dates": "2008 – 2012",
+      "company": "HARSCO METALS (UAE)",
+      "job_title": "Regional Managing Director, ME & Africa",
+      "description": "Managed a rapidly growing $100M business unit in the Middle East and Africa, delivering industrial services and products to the mining and metals sectors.\n\nNegotiated and implemented multi-million-dollar service contracts across multiple countries, driving new business and operational success.\nSuccessfully integrated Kaizen practices across diverse cultural environments, leading to cost reductions and enhanced customer satisfaction."
+    },
+    {
+      "dates": "2007 – 2008",
+      "company": "MULTISERV GROUP PLC (UK)",
+      "job_title": "Director, Business Development",
+      "description": "Led business development efforts to capitalize on changes in legislation, technology, and market consolidation in the metals and mining sectors."
+    },
+    {
+      "dates": "2003 – 2007",
+      "company": "METSERV PTY LTD (AUSTRALIA)",
+      "job_title": "General Manager & Director",
+      "description": ""
+    },
+    {
+      "dates": "1997 – 2003",
+      "company": "HECKETT MULTISERV PLC (UK)",
+      "job_title": "Steel Services Development Manager",
+      "description": ""
+    }
+  ],
+  "education": [
+    { "dates": "2002", "institution": "London Business School", "degree": "MBA (Executive)" },
+    { "dates": "1996", "institution": "University of Wales, Swansea", "degree": "EngD (Engineering Doctorate)" },
+    { "dates": "1992", "institution": "University of Wales, Swansea", "degree": "BEng (Hons)" }
+  ],
+  "professional_development": [
+    "LeanSigma Champion Training, TBM",
+    "EVA Training, Stern Stewart",
+    "MBA Electives: Advanced Corporate Finance I & II, International Finance, Mergers, MBOs & Corporate Reorganisations, Modelling for Shareholder Value, Managing Corporate Turnarounds, World Economy"
+  ],
+  "professional_affiliations": [
+    "Member, Institute of Mining, Materials and Metallurgy",
+    "Chartered Engineer"
+  ],
+  "languages": []
+}

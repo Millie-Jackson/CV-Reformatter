@@ -1,0 +1,15 @@
+{
+  "order": [
+    "PERSONAL PROFILE",
+    "KEY SKILLS",
+    "PROFESSIONAL DEVELOPMENT",
+    "EDUCATION",
+    "EMPLOYMENT HISTORY",
+    "ADDITIONAL INFORMATION"
+  ],
+  "aliases": {
+    "PROFESSIONAL DEVELOPMENT": ["OTHER HEADINGS", "OTHER HEADINGS (PROF DEV)", "PD"]
+  },
+  "suppress_empty": true,
+  "dedupe_titles": true
+}
