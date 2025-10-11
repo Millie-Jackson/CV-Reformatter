@@ -8,8 +8,9 @@
     "ADDITIONAL INFORMATION"
   ],
   "aliases": {
-    "PROFESSIONAL DEVELOPMENT": ["OTHER HEADINGS", "OTHER HEADINGS (PROF DEV)", "PD"]
+    "PROFESSIONAL DEVELOPMENT": ["OTHER HEADINGS", "OTHER HEADINGS (PROF DEV)", "PD"],
+    "EMPLOYMENT HISTORY": ["WORK HISTORY", "EXPERIENCE"]
   },
-  "suppress_empty": true,
-  "dedupe_titles": true
+  "dedupe_titles": true,
+  "suppress_empty": ["ADDITIONAL INFORMATION"]
 }

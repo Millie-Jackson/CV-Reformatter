@@ -1,0 +1,14 @@
+from docx import Document
+from cv_reformatter.sections import header as H
+
+def test_header_overwrites_template_placeholders():
+    doc = Document()
+    # create two paragraphs to simulate template placeholders
+    p0 = doc.add_paragraph("CURRICULUM VITAE FOR FIRSTNAME LASTNAME")
+    p1 = doc.add_paragraph("CANDIDATE LOCATION: N/A")
+
+    data = {"first_name": "Kris", "last_name": "Matt", "candidate_location": "Teddington"}
+    H.write_section(doc, "HEADER", "", data)
+
+    assert doc.paragraphs[0].text == "CURRICULUM VITAE FOR KRIS MATT"
+    assert doc.paragraphs[1].text == "CANDIDATE LOCATION: TEDDINGTON"
