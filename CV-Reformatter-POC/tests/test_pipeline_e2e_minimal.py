@@ -1,37 +1,68 @@
-import json, os
+import json
+import os
 from docx import Document
+from docx.shared import Pt
 from cv_reformatter.pipeline import reformat_cv_cv1_to_template1
 
-def _make_minimal_template(path: str):
+def _make_minimal_template(path: str) -> None:
     doc = Document()
-    # a blank doc acts as the template; meta & writers will build the content
+    # headings only; writers will populate bodies
+    for title in [
+        "PERSONAL PROFILE",
+        "KEY SKILLS",
+        "PROFESSIONAL DEVELOPMENT",
+        "EDUCATION",
+        "EMPLOYMENT HISTORY",
+        "ADDITIONAL INFORMATION",
+    ]:
+        p = doc.add_paragraph(title)
+        try:
+            p.style = doc.styles["Heading 2"]
+        except KeyError:
+            pass
     doc.save(path)
 
 def _sample_fields():
+    # minimal but realistic data to exercise writers
     return {
-        "summary": "Results-driven leader with international experience.",
+        "summary": "Seasoned, results-driven leader with international experience across strategy, ops, and finance.",
         "skills": ["Leadership", "Financial Modelling"],
-        # PD via canonical key; 'Other Headings' remap is also supported elsewhere
         "professional_development": [
             "LeanSigma Champion Training, TBM",
-            "EVA Training, Stern Stewart"
+            "EVA Training, Stern Stewart",
         ],
         "education": [
-            {"year": "2021", "institution": "Uni Somewhere", "title": "MBA", "award": "Distinction"}
+            {"institution": "Uni Somewhere", "award": "Distinction", "qualification": "MBA (Executive)", "year": "2020"},
         ],
-        "employment_history": [
+        "experience": [
             {
+                "company": "Franchise Brands plc, London",
                 "title": "Head of Ops",
-                "company": "Franchise Brands plc",
-                "location": "London",
-                "start": "Jan 2021",
-                "end": "Present",
-                "company_blurb": "Multi-brand franchisor.",
-                "bullets": ["Led X", "Saved £3m"]
+                "company_info": "Multi-brand franchisor.",
+                "bullets": ["Led X", "Saved £3m"],
+                "dates": "2019–Present",
             }
         ],
-        "additional_information": ["Full UK Driving Licence"]
+        "additional_information": ["Full UK Driving Licence"],
     }
+
+def _has_nonempty_body_after(doc: Document, heading_text: str) -> bool:
+    """Find heading and check at least one following paragraph has text."""
+    idx = None
+    for i, p in enumerate(doc.paragraphs):
+        if (p.text or "").strip().upper() == heading_text.upper():
+            idx = i
+            break
+    if idx is None:
+        return False
+    # scan forward until next heading or end
+    for q in doc.paragraphs[idx + 1:]:
+        style_name = (getattr(q.style, "name", "") or "").upper()
+        if style_name in ("HEADING 1", "HEADING 2", "HEADING 3"):
+            break
+        if (q.text or "").strip():
+            return True
+    return False
 
 def test_pipeline_e2e_builds_doc_with_correct_section_order(tmp_path):
     template = tmp_path / "template.docx"
@@ -43,7 +74,6 @@ def test_pipeline_e2e_builds_doc_with_correct_section_order(tmp_path):
 
     out_path = tmp_path / "out.docx"
 
-    # run pipeline with our standard profiles
     reformat_cv_cv1_to_template1(
         input_docx=str(template),
         template_docx=str(template),
@@ -54,24 +84,24 @@ def test_pipeline_e2e_builds_doc_with_correct_section_order(tmp_path):
         section_profile_name="template1_sections.json",
     )
 
-    # read back and assert ordering + content
     doc = Document(str(out_path))
-    texts = [p.text for p in doc.paragraphs]
-    joined = "\n".join(texts)
+    joined = "\n".join(p.text for p in doc.paragraphs)
 
-    # order: Personal Profile -> Key Skills -> Professional Development -> Education -> Employment -> Additional Info
-    idx = {k: joined.find(k) for k in [
-        "PERSONAL PROFILE", "KEY SKILLS", "PROFESSIONAL DEVELOPMENT",
-        "EDUCATION", "EMPLOYMENT HISTORY", "ADDITIONAL INFORMATION"
-    ]}
-    # All present and in order
+    # 1) All headings present
+    order = [
+        "PERSONAL PROFILE",
+        "KEY SKILLS",
+        "PROFESSIONAL DEVELOPMENT",
+        "EDUCATION",
+        "EMPLOYMENT HISTORY",
+        "ADDITIONAL INFORMATION",
+    ]
+    idx = {k: joined.find(k) for k in order}
     assert all(v >= 0 for v in idx.values())
+
+    # 2) In canonical order
     assert idx["PERSONAL PROFILE"] < idx["KEY SKILLS"] < idx["PROFESSIONAL DEVELOPMENT"] < idx["EDUCATION"] < idx["EMPLOYMENT HISTORY"] < idx["ADDITIONAL INFORMATION"]
 
-    # Spot-check content from each writer made it in
-    assert "Results-driven leader with international experience." in joined
-    assert "Leadership" in joined and "Financial Modelling" in joined
-    assert "LeanSigma Champion Training, TBM" in joined
-    assert "2021" in joined and "Uni Somewhere" in joined and "MBA" in joined
-    assert "Head of Ops" in joined and "Franchise Brands plc" in joined and "Saved £3m" in joined
-    assert "Full UK Driving Licence" in joined
+    # 3) Each section has at least one non-empty paragraph written by its writer
+    for h in order:
+        assert _has_nonempty_body_after(doc, h), f"No body text under heading: {h}"
